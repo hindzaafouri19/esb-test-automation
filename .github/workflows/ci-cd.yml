@@ -1,0 +1,49 @@
+name: Java Backend Selenium Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  test-backend-selenium:
+    runs-on: ubuntu-latest
+
+    services:
+      selenium:
+        image: selenium/standalone-chrome:latest
+        ports:
+          - 4444:4444
+
+    steps:
+      # 1. Checkout repos
+      - name: Checkout automation repo
+        uses: actions/checkout@v3
+
+      - name: Checkout EBS-Back repo
+        uses: actions/checkout@v3
+        with:
+          repository: 3tux/EBS-Back
+          path: EBS-Back
+
+      # 2. Set up Java
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: temurin
+          java-version: 17
+
+      # 3. Build and run unit tests
+      - name: Build & Test Backend
+        run: |
+          cd EBS-Back
+          mvn clean install
+
+      # 4. Run Selenium Java tests
+      - name: Run Selenium Java Tests
+        run: |
+          cd EBS-Back
+          # Point tests to Selenium server
+          mvn test -Dwebdriver.remote.url=http://localhost:4444/wd/hub \
+                   -Dselenium.browser=chrome
