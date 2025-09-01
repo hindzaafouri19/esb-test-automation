@@ -20,7 +20,7 @@ jobs:
           token: ${{ secrets.ACCESS_TOKEN_3TUX }}
       - name: Build backend image
         run: |
-          docker build -t back:test ./EBS-Back
+          docker build -t back:test -f ./EBS-Back/Dockerfile.prod ./EBS-Back
       - name: Set output
         run: echo "image=back:test" >> $GITHUB_OUTPUT
 
@@ -37,7 +37,7 @@ jobs:
           token: ${{ secrets.ACCESS_TOKEN_3TUX }}
       - name: Build frontend image
         run: |
-          docker build -t front:test ./EBS-Front
+          docker build -t front:test -f ./EBS-Front/Dockerfile.prod ./EBS-Front
       - name: Set output
         run: echo "image=front:test" >> $GITHUB_OUTPUT
 
