@@ -27,6 +27,7 @@ jobs:
           repository: 3tux/EBS-Back
           path: EBS-Back
           ref: master
+          token: ${{ secrets.ACCESS_TOKEN_3TUX }}
 
       # 2. Set up Java
       - name: Setup Java
