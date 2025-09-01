@@ -1,0 +1,8 @@
+services:
+  back:
+    image: back:${BACKEND_SHA}
+    container_name: ebs-back
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "5500:5500"

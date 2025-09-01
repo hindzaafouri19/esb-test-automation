@@ -13,9 +13,32 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # 2️⃣ Display artifact info from the payload
+      # 2️⃣ Set BACKEND_SHA from payload
+      - name: Set BACKEND_SHA
+        run: echo "BACKEND_SHA=${{ github.event.client_payload.commit }}" >> $GITHUB_ENV
+
+      # 3️⃣ Display artifact info
       - name: Show artifact name
         run: |
           echo "Triggered by repo: ${{ github.event.client_payload.repo }}"
           echo "Commit SHA: ${{ github.event.client_payload.commit }}"
           echo "Artifact name: ${{ github.event.client_payload.artifact_name }}"
+
+      # 4️⃣ Download artifact from builder repo
+      - name: Download Backend artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: ${{ github.event.client_payload.artifact_name }}
+          path: ./artifacts
+
+      # 5️⃣ Load Docker image
+      - name: Load Backend Docker image
+        run: |
+          docker load < ./artifacts/back-${{ github.event.client_payload.commit }}.tar.gz
+
+      # 6️⃣ Run Docker Compose using BACKEND_SHA
+      - name: Deploy with Docker Compose
+        run: |
+          docker-compose -f docker-compose.test.yml up -d back
+        env:
+          BACKEND_SHA: ${{ github.event.client_payload.commit }}
