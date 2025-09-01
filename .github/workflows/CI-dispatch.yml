@@ -26,7 +26,7 @@ jobs:
 
       # 4️⃣ Download artifact from builder repo
       - name: Download Backend artifact
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: ${{ github.event.client_payload.artifact_name }}
           path: ./artifacts
