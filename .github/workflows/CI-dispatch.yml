@@ -1,0 +1,21 @@
+name: Display Backend Artifact
+
+on:
+  repository_dispatch:
+    types: [microservice-updated]
+
+jobs:
+  display-artifact:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1️⃣ Checkout repo (optional if you need repo files)
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # 2️⃣ Display artifact info from the payload
+      - name: Show artifact name
+        run: |
+          echo "Triggered by repo: ${{ github.event.client_payload.repo }}"
+          echo "Commit SHA: ${{ github.event.client_payload.commit }}"
+          echo "Artifact name: ${{ github.event.client_payload.artifact_name }}"
