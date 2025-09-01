@@ -7,101 +7,71 @@ on:
       - main
 
 jobs:
-  # 1. Build backend image locally
-  build-back:
+  build-test-and-promote:
     runs-on: ubuntu-latest
-    outputs:
-      image: back:test
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          repository: 3tux/EBS-Back
-          path: EBS-Back
-          token: ${{ secrets.ACCESS_TOKEN_3TUX }}
-      - name: Build backend image
-        run: |
-          docker build -t back:test -f ./EBS-Back/Dockerfile.prod ./EBS-Back
-      - name: Set output
-        run: echo "image=back:test" >> $GITHUB_OUTPUT
-
-  # 2. Build frontend image locally
-  build-front:
-    runs-on: ubuntu-latest
-    outputs:
-      image: front:test
-    steps:
-      - uses: actions/checkout@v3
-        with:
-          repository: 3tux/EBS-Front
-          path: EBS-Front
-          token: ${{ secrets.ACCESS_TOKEN_3TUX }}
-      - name: Build frontend image
-        run: |
-          docker build -t front:test -f ./EBS-Front/Dockerfile.prod ./EBS-Front
-      - name: Set output
-        run: echo "image=front:test" >> $GITHUB_OUTPUT
-
-  # 3. Build CT service image locally
-  # build-ct-service:
-  #   runs-on: ubuntu-latest
-  #   outputs:
-  #     image: ct:test
-  #   steps:
-  #     - uses: actions/checkout@v3
-  #       with:
-  #         repository: 3tux/ebs-ct-service
-  #         path: ebs-ct-service
-  #         token: ${{ secrets.ACCESS_TOKEN_3TUX }}
-  #     - name: Build CT service image
-  #       run: |
-  #         docker build -t ct:test ./ebs-ct-service
-  #     - name: Set output
-  #       run: echo "image=ct:test" >> $GITHUB_OUTPUT
-
-  # 4. Integration tests (Selenium)
-  integration-tests:
-    runs-on: ubuntu-latest
-    needs: [build-back, build-front]
     services:
       selenium:
         image: selenium/standalone-chrome:latest
         ports:
           - 4444:4444
     steps:
+      # Checkout all repositories
+      - uses: actions/checkout@v3
+        with:
+          repository: 3tux/EBS-Back
+          path: EBS-Back
+          token: ${{ secrets.ACCESS_TOKEN_3TUX }}
+      - uses: actions/checkout@v3
+        with:
+          repository: 3tux/EBS-Front
+          path: EBS-Front
+          token: ${{ secrets.ACCESS_TOKEN_3TUX }}
       - uses: actions/checkout@v3
         with:
           repository: hindzaafouri19/esb-test-automation
-      - name: Start containers for testing
+          path: esb-test-automation
+
+      # Build all images locally
+      - name: Build backend image
+        run: docker build -t back:test -f ./EBS-Back/Dockerfile.prod ./EBS-Back
+      - name: Build frontend image
+        run: docker build -t front:test -f ./EBS-Front/Dockerfile.prod ./EBS-Front
+      # Uncomment if you want CT service
+      # - name: Build CT service image
+      #   run: docker build -t ct:test -f ./ebs-ct-service/Dockerfile.prod ./ebs-ct-service
+
+      # Start containers for testing
+      - name: Start containers
         run: |
           docker network create easybulk-net || true
           docker run -d --name back --network easybulk-net back:test
           docker run -d --name front --network easybulk-net front:test
+
+      # Run Selenium tests
       - name: Run Selenium tests
         run: |
           export SELENIUM_REMOTE_URL=http://localhost:4444/wd/hub
           mvn test -f EBS-Back/pom.xml
+
+      # Stop containers
       - name: Stop containers
         run: |
           docker stop back front 
           docker rm back front 
 
-  # # 5. Promote images to production if tests pass
-  # promote-images:
-  #   runs-on: ubuntu-latest
-  #   needs: integration-tests
-  #   if: success()
-  #   steps:
-  #     - name: Docker login
-  #       uses: docker/login-action@v3
-  #       with:
-  #         registry: registry.tritux.com
-  #         username: ${{ secrets.DOCKER_REGISTRY_USERNAME }}
-  #         password: ${{ secrets.DOCKER_REGISTRY_TOKEN }}
-  #     - name: Tag and push production images
-  #       run: |
-  #         docker tag back:test registry.tritux.com/easybulk3/back:prod
-  #         docker tag front:test registry.tritux.com/easybulk3/front:prod
-  #         docker tag ct:test registry.tritux.com/easybulk3/ct-service:prod
-  #         docker push registry.tritux.com/easybulk3/back:prod
-  #         docker push registry.tritux.com/easybulk3/front:prod
-  #         docker push registry.tritux.com/easybulk3/ct-service:prod
+      # Docker login and push images only if tests succeed
+      - name: Docker login
+        if: success()
+        uses: docker/login-action@v3
+        with:
+          registry: registry.tritux.com
+          username: ${{ secrets.DOCKER_REGISTRY_USERNAME }}
+          password: ${{ secrets.DOCKER_REGISTRY_TOKEN }}
+
+      # - name: Tag and push production images
+      #   if: success()
+      #   run: |
+      #     docker tag back:test registry.tritux.com/easybulk3/back:prod
+      #     docker tag front:test registry.tritux.com/easybulk3/front:prod
+      #     docker push registry.tritux.com/easybulk3/back:prod
+      #     docker push registry.tritux.com/easybulk3/front:prod
