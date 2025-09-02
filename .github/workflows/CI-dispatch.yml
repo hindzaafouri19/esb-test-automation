@@ -13,12 +13,15 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # 2️⃣ Set backend image metadata from dispatch payload
+      # 2️⃣ Set backend image metadata
       - name: Set backend image metadata
         run: |
-          echo "BACKEND_IMAGE=${{ github.event.client_payload.image }}" >> $GITHUB_ENV
-          echo "IMAGE_NAME=$(echo $BACKEND_IMAGE | cut -d':' -f1)" >> $GITHUB_ENV
-          echo "IMAGE_TAG=$(echo $BACKEND_IMAGE | cut -d':' -f2)" >> $GITHUB_ENV
+          BACKEND_IMAGE="${{ github.event.client_payload.image }}"
+          IMAGE_NAME="${BACKEND_IMAGE%:*}"   # everything before last colon
+          IMAGE_TAG="${BACKEND_IMAGE##*:}"   # everything after last colon
+          echo "BACKEND_IMAGE=$BACKEND_IMAGE" >> $GITHUB_ENV
+          echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
       # 3️⃣ Display debug info
       - name: Show backend image info
@@ -27,7 +30,7 @@ jobs:
           echo "Image name: $IMAGE_NAME"
           echo "Image tag: $IMAGE_TAG"
 
-      # 4️⃣ Update docker-compose.override.yml
+      # 4️⃣ Override backend image in docker-compose.test.yml
       - name: Override backend image in Compose file
         run: |
           COMPOSE_FILE=docker-compose.test.yml
@@ -36,13 +39,9 @@ jobs:
           # Replace image line
           sed -i "s|image: $IMAGE_NAME:latest|image: $BACKEND_IMAGE|g" $COMPOSE_FILE
 
-      # 5️⃣ Pull and start updated stack
-      # - name: Pull & start stack
-      #   run: |
-      #     docker-compose pull
-      #     docker-compose up -d
-
-      # 6️⃣ Optional: Run E2E / integration tests
-      # - name: Run tests
-      #   run: |
-      #     pytest tests/e2e/
+      # 5️⃣ Display the updated Compose file
+      - name: Display overridden docker-compose.test.yml
+        run: |
+          echo "===== Updated docker-compose.test.yml ====="
+          cat docker-compose.test.yml
+          echo "=========================================="
