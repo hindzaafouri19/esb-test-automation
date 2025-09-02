@@ -1,8 +1,459 @@
+ 
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: ebs-db
+    restart: unless-stopped
+    ports:
+      - 9874:5432
+    volumes:
+        - ${BASE_PATH}/init/postgres:/docker-entrypoint-initdb.d
+        - ${BASE_PATH}/data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    environment:
+         POSTGRES_MULTIPLE_DATABASES: ${AIRFLOW_DB}, ${DATABASE_DB}, ${KEYCLOAK_DB}, ${BACKEND_DB}
+         POSTGRES_USER: ${DATABASE_USER}
+         POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+    networks:
+      - data
+      - kannel
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: ebs-pgadmin
+    restart: unless-stopped
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@example.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+    volumes:
+      - ${BASE_PATH}/config/pgadmin:/pgadmin4/servers
+    ports:
+      - "8007:80"
+    networks:
+      - data
+  doc-db:
+    image: mongo:5.0
+    container_name: ebs-doc-db
+    restart: unless-stopped
+    ports:
+      - '27017:27017'
+    volumes:
+      - ${BASE_PATH}/data/mongodb:/data/db
+      - ${BASE_PATH}/init/mongodb/init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - data
+
+  mongo-express:
+    image: mongo-express
+    container_name: ebs-mongo-express
+    restart: unless-stopped
+    environment:
+      - ME_CONFIG_MONGODB_SERVER=doc-db  
+      - ME_CONFIG_MONGODB_PORT=27017
+      - ME_CONFIG_SITE_BASEURL=/mongo-db
+      - ME_CONFIG_BASICAUTH=false
+      - ME_CONFIG_BASICAUTH_USERNAME=
+      - ME_CONFIG_BASICAUTH_PASSWORD=  
+    depends_on:
+      - doc-db
+    networks:
+      - data
+  proxy:
+    image: caddy:2
+    container_name: ebs-proxy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "-T","1", "http://localhost:2019/metrics","-O","-" ]
+      interval: 1m30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    env_file:
+      - .env
+    ports:
+      - ${CADDY_HTTP_PORT}:80
+      - 2018:2018
+    volumes:
+      - ${BASE_PATH}/config/proxy/Caddyfile:/etc/caddy/Caddyfile
+      - ${BASE_PATH}/config/proxy/sites:/etc/caddy/sites:ro
+      - ${BASE_PATH}/config/proxy/snippets:/etc/caddy/snippets:ro
+      - ${BASE_PATH}/data/proxy/data:/data
+      - ${BASE_PATH}/data/proxy/config:/config
+      - /var/log/ebs-proxy:/var/log/caddy
+    depends_on:
+      - front
+      - back
+      - auth
+      - centrifugo
+      - pgadmin
+      - superset
+      - front-2
+    networks:
+      - frontend-net
+      - backend-net
+      - auth-net
+      - data
+
+  front:
+    image: registry.tritux.com/easybulk3/front:latest
+    container_name: ebs-front
+    restart: unless-stopped
+    networks:
+      - frontend-net
+  front-2:
+    image: registry.tritux.com/easybulk3/ebs-contact-picker:latest
+    container_name: ebs-front-2
+    restart: unless-stopped
+    networks:
+      - frontend-net
   back:
-    image: back:${BACKEND_SHA}
+    image: registry.tritux.com/easybulk3/back:latest
     container_name: ebs-back
     restart: unless-stopped
     ports:
-      - "9000:9000"
+      - ${SERVER_PORT}:${SERVER_PORT}
       - "5500:5500"
+    env_file:
+        - .env
+    volumes:
+      - ${BASE_PATH}/backend:/ebs-back
+      - ${BASE_PATH}/files:/data
+      - ${BASE_PATH}/init/backend:/init
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend-net
+      - data
+      - kannel  
+      - redis_app_net
+      
+  auth:
+    image: registry.tritux.com/easybulk3/keycloak:v3.0.0
+    command: 
+      - "start-dev"
+      - "--features=\"docker,token-exchange\""
+      - "--http-relative-path=/auth"  
+      - "--spi-theme-cache-themes=false --spi-theme-cache-templates=false"
+      - "--import-realm"
+      - "--spi-login-protocol-openid-connect-legacy-logout-redirect-uri=true"
+    container_name: ebs-auth
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "8443:8443"
+    env_file:
+      - .env 
+    environment:  
+      - KC_HOSTNAME=app.smartsms.tn
+      - KC_HOSTNAME_ADMIN_URL=https://app.smartsms.tn/auth
+      - PROXY_ADDRESS_FORWARDING=true
+      - KC_PROXY=edge
+      - KC_HOSTNAME_STRICT_HTTPS=true
+      - KC_HOSTNAME_STRICT=true    
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ${BASE_PATH}/config/auth/keycloak-realms/ebs-realm.json:/opt/keycloak/data/import/ebs-realm.json:ro
+      - ${BASE_PATH}/config/auth/themes:/opt/keycloak/themes
+      - ${BASE_PATH}/config/auth/providers:/opt/keycloak/providers
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/auth"]
+      interval: 10s
+      timeout: 5s
+      retries: 10 
+    networks:
+      - auth-net
+      - data
+
+
+  centrifugo:
+    image: registry.tritux.com/easybulk3/centrifugo:v3.0.0
+    container_name: ebs-centrifugo
+    volumes:
+      - ${BASE_PATH}/config/centrifugo/config.json:/centrifugo/config.json
+    command: centrifugo -c config.json
+    ports:
+      - 8000:8000
+    restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    networks:
+      - frontend-net
+      - backend-net
+           
+  redis:
+    image: redis:7
+    container_name: superset_cache
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6379:6379"
+    volumes:
+      - ${BASE_PATH}/data/redis:/data
+    networks:
+      - auth-net
+      - redis_app_net
+      
+  superset:
+    env_file: .env
+    image: registry.tritux.com/easybulk3/superset
+    container_name: ebs-superset
+    command: ["/app/docker/docker-bootstrap.sh", "app-gunicorn"]
+    user: "root"
+    restart: unless-stopped
+    ports:
+      - 8888:8088
+    depends_on:
+      - db
+      - redis
+    volumes:
+      - ${BASE_PATH}/init/superset/:/app/superset_home/init
+    networks:
+      - auth-net
+      - data
+      - superset
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  superset-init:
+    image: registry.tritux.com/easybulk3/superset
+    container_name: ebs-superset-init
+    command: ["/app/docker/docker-init.sh"]
+    env_file: .env
+    user: "root"
+    depends_on:
+      - db
+      - redis
+    healthcheck:
+      disable: true
+    networks:
+      - superset
+      - data
+
+  drill:
+    image: apache/drill:1.21.2
+    container_name: ebs-drill
+    ports:
+      - "8047:8047"
+    stdin_open: true  # add this line
+    restart: unless-stopped
+    volumes:
+      - ${BASE_PATH}/config/drill/connection.conf:/opt/drill/conf/storage-plugins-override.conf
+      - ${BASE_PATH}/config/drill/drill-override.conf:/opt/drill/conf/drill-override.conf
+    depends_on:
+      - doc-db
+    networks:
+      - data
+      - superset
+      
+      
+  bearerbox:
+    image: registry.tritux.com/easybulk3/bearerbox:v3.0.0
+    platform: linux/x86_64
+    restart: unless-stopped
+    entrypoint: bearerbox -v 0 /etc/kannel/kannel.conf
+    container_name: kannel-bearerbox
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:13000 || exit 1
+    volumes:
+      - ${BASE_PATH}/config/kannel/kannel:/etc/kannel
+      - ${BASE_PATH}/logs/kannel/kannel:/var/log/kannel
+      - ${BASE_PATH}/data/kannel/spool/store:/var/spool/kannel-store
+      - ${BASE_PATH}/data/kannel/spool/dlr:/var/spool/kannel-dlr
+    ports:
+      - 13000:13000
+    networks:
+      - kannel    
+
+  sqlbox:
+    image: registry.tritux.com/easybulk3/sqlbox:latest
+    platform: linux/x86_64
+    container_name: kannel-sqlbox
+    restart: unless-stopped
+    command: sqlbox /etc/kannel/sqlbox.conf
+    depends_on:
+      bearerbox:
+        condition: service_healthy
+        restart: true
+      proxysql:
+        condition: service_started
+        restart: true
+    volumes:
+      - ${BASE_PATH}/config/kannel/sqlbox:/etc/kannel
+      - ${BASE_PATH}/logs/kannel/sqlbox:/var/log/kannel
+    networks:
+      - kannel    
+
+  proxysql:
+    image: proxysql/proxysql:3.0.2-debian
+    platform: linux/x86_64
+    container_name: kannel-sqlbox-db-proxy
+    restart: unless-stopped 
+    volumes:
+      - ${BASE_PATH}/config/kannel/proxysql/proxysql.cnf:/etc/proxysql.cnf:ro
+      - ${BASE_PATH}/data/kannel/proxysql:/var/lib/proxysql
+    depends_on:
+      db:
+        condition: service_healthy
+        restart: true
+    networks:
+      - kannel     
+
+
+
+
+  smppsim:
+    image: registry.tritux.com/smsgw/smppsim
+    platform: linux/x86_64
+    restart: unless-stopped
+    container_name: kannel-smppsimulator
+    healthcheck:
+      test: curl --fail http://localhost:88 || exit 1
+    ports:
+      - 8088:88
+      - 2775:2775
+    volumes:
+      - ${BASE_PATH}/config/kannel/smppsim/deliver_messages.csv:/opt/local/smppsim/deliver_messages.csv
+      - ${BASE_PATH}/config/kannel/smppsim/logging.properties:/opt/local/smppsim/conf/logging.properties
+      - ${BASE_PATH}/config/kannel/smppsim/props.mo:/opt/local/smppsim/conf/props.mo
+      - ${BASE_PATH}/config/kannel/smppsim/smppsim.props:/opt/local/smppsim/conf/smppsim.props
+      - ${BASE_PATH}/logs/kannel/smppsim:/opt/local/smppsim/log
+    networks:
+      - kannel           
+      
+  rabbitmq:
+    image: docker.io/rabbitmq:3-management
+    container_name: ${PROJECT_NAME}-${RABBIT_MQ_HOST}
+    hostname: ${RABBIT_MQ_HOST}
+    privileged: true
+    restart: unless-stopped
+    ports:
+        - '15672:15672'
+        - '5672:5672'
+    volumes:
+        - ${BASE_PATH}/data/rabbitmq:/var/lib/rabbitmq
+    environment:
+        - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
+        - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}
+    healthcheck:
+        test: ["CMD", "rabbitmqctl", "status"]
+        interval: 10s
+        timeout: 5s
+        retries: 3
+    networks:
+      - airflow-data
+      - backend-net
+
+      
+  worker:
+    image : registry.tritux.com/easybulk3/airflow:latest
+    container_name: ${PROJECT_NAME}-air-worker
+    env_file:
+        - .env
+    user: "1000:1000"
+    volumes: 
+        - ${BASE_PATH}/files:/data
+    command: ./scripts/start-celery.sh
+    depends_on:
+        - scheduler
+    restart: unless-stopped
+    deploy:
+        restart_policy:
+            condition: on-failure
+            delay: 8s
+            max_attempts: 3
+    healthcheck:
+        test: ["CMD", "curl", "-f", "http://worker:8080/"]
+        interval: 10s
+        timeout: 5s
+        retries: 3
+    networks:
+      - data
+      - airflow-data
+      - backend-net 
+      - kannel     
+  webserver:
+    image : registry.tritux.com/easybulk3/airflow:latest
+    container_name: ${PROJECT_NAME}-air-webserver
+    command: ./scripts/start-webserver.sh
+    user: "1000:1000"
+    depends_on:
+        - db
+        - rabbitmq
+    env_file: .env
+    restart: unless-stopped
+    healthcheck:
+        test: ["CMD", "curl", "-f", "http://webserver:8080/"]
+        interval: 10s
+        timeout: 5s
+        retries: 3
+    ports:
+        - 7071:8080
+    volumes: 
+        - ${BASE_PATH}/files:/data
+    networks:
+      - data
+      - airflow-data
+      - backend-net  
+      - kannel  
+            
+  scheduler:
+    image : registry.tritux.com/easybulk3/airflow:latest
+    container_name: ${PROJECT_NAME}-air-scheduler
+    command: ./scripts/start-scheduler.sh
+    user: "1000:1000"
+    depends_on:
+        - webserver
+    restart: unless-stopped
+    env_file: .env
+    healthcheck:
+        test: ["CMD", "nc", "-z", "scheduler","8974"]
+        interval: 10s
+        timeout: 5s
+        retries: 3
+    volumes: 
+        - ${BASE_PATH}/files:/data
+    networks:
+      - data
+      - airflow-data
+      - backend-net
+      - kannel   
+  back_ct:
+    image : registry.tritux.com/easybulk3/ebs-ct-service:latest
+    container_name: ebs-ct-service
+    restart: unless-stopped
+    ports:
+      - "9002:9002"
+    environment:  
+      - CROS_ORIGIN=https://app.smartsms.tn
+
+    volumes:
+      - ${BASE_PATH}/ebs-ct-service:/ebs-ct-service
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - backend-net
+      - data
+      - kannel  
+      - redis_app_net            
+networks:
+  data:
+  airflow-data:
+  frontend-net:
+  backend-net:
+  auth-net:
+  kannel:
+  superset:
+  redis_app_net:
+ 
+    
+    
+

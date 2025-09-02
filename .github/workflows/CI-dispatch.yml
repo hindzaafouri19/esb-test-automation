@@ -1,44 +1,48 @@
-name: Display Backend Artifact
+name: Orchestrator Backend Update
 
 on:
   repository_dispatch:
     types: [microservice-updated]
 
 jobs:
-  display-artifact:
+  update-backend-image:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout repo (optional if you need repo files)
+      # 1️⃣ Checkout orchestrator repo
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # 2️⃣ Set BACKEND_SHA from payload
-      - name: Set BACKEND_SHA
-        run: echo "BACKEND_SHA=${{ github.event.client_payload.commit }}" >> $GITHUB_ENV
-
-      # 3️⃣ Display artifact info
-      - name: Show artifact name
+      # 2️⃣ Set backend image metadata from dispatch payload
+      - name: Set backend image metadata
         run: |
-          echo "Triggered by repo: ${{ github.event.client_payload.repo }}"
-          echo "Commit SHA: ${{ github.event.client_payload.commit }}"
-          echo "Artifact name: ${{ github.event.client_payload.artifact_name }}"
+          echo "BACKEND_IMAGE=${{ github.event.client_payload.image }}" >> $GITHUB_ENV
+          echo "IMAGE_NAME=$(echo $BACKEND_IMAGE | cut -d':' -f1)" >> $GITHUB_ENV
+          echo "IMAGE_TAG=$(echo $BACKEND_IMAGE | cut -d':' -f2)" >> $GITHUB_ENV
 
-      # 4️⃣ Download artifact from builder repo
-      - name: Download Backend artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ${{ github.event.client_payload.artifact_name }}
-          path: ./artifacts
-
-      # 5️⃣ Load Docker image
-      - name: Load Backend Docker image
+      # 3️⃣ Display debug info
+      - name: Show backend image info
         run: |
-          docker load < ./artifacts/back-${{ github.event.client_payload.commit }}.tar.gz
+          echo "Full image: $BACKEND_IMAGE"
+          echo "Image name: $IMAGE_NAME"
+          echo "Image tag: $IMAGE_TAG"
 
-      # 6️⃣ Run Docker Compose using BACKEND_SHA
-      - name: Deploy with Docker Compose
+      # 4️⃣ Update docker-compose.override.yml
+      - name: Override backend image in Compose file
         run: |
-          docker-compose -f docker-compose.test.yml up -d back
-        env:
-          BACKEND_SHA: ${{ github.event.client_payload.commit }}
+          COMPOSE_FILE=docker-compose.test.yml
+          # Backup original file
+          cp $COMPOSE_FILE $COMPOSE_FILE.bak
+          # Replace image line
+          sed -i "s|image: $IMAGE_NAME:latest|image: $BACKEND_IMAGE|g" $COMPOSE_FILE
+
+      # 5️⃣ Pull and start updated stack
+      # - name: Pull & start stack
+      #   run: |
+      #     docker-compose pull
+      #     docker-compose up -d
+
+      # 6️⃣ Optional: Run E2E / integration tests
+      # - name: Run tests
+      #   run: |
+      #     pytest tests/e2e/
